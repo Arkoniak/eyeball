@@ -37,7 +37,11 @@ impl<T: Send + Sync + 'static> Subscriber<T, AsyncLock> {
         version: u64,
     ) -> Self {
         let get_lock = ReusableBoxFuture::new(inner.clone().lock_owned());
-        Self { state: AsyncSubscriberState { inner, get_lock }, observed_version: version }
+        Self {
+            state: AsyncSubscriberState { inner, get_lock },
+            observed_version: version,
+            waker: Default::default(),
+        }
     }
 
     /// Wait for an update and get a clone of the updated value.
@@ -142,7 +146,7 @@ impl<T: Send + Sync + 'static> Subscriber<T, AsyncLock> {
             self.observed_version = version;
             Poll::Ready(Some(()))
         } else {
-            state.add_waker(cx.waker().clone());
+            state.add_waker(&self.waker, cx.waker().clone());
             Poll::Pending
         }
     }
@@ -161,7 +165,7 @@ impl<T: Send + Sync + 'static> Subscriber<T, AsyncLock> {
             self.observed_version = version;
             Poll::Ready(Some(state.get().clone()))
         } else {
-            state.add_waker(cx.waker().clone());
+            state.add_waker(&self.waker, cx.waker().clone());
             Poll::Pending
         }
     }

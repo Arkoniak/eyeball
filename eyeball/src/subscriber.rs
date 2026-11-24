@@ -7,12 +7,17 @@ use std::{
     fmt,
     future::{poll_fn, Future},
     pin::Pin,
+    sync::Arc,
     task::{Context, Poll},
 };
 
 use futures_core::Stream;
 
-use crate::{lock::Lock, state::ObservableState, ObservableReadGuard, SyncLock};
+use crate::{
+    lock::Lock,
+    state::{ObservableState, WakerSlot},
+    ObservableReadGuard, SyncLock,
+};
 
 #[cfg(feature = "async-lock")]
 pub(crate) mod async_lock;
@@ -22,11 +27,13 @@ pub(crate) mod async_lock;
 pub struct Subscriber<T, L: Lock = SyncLock> {
     state: L::SubscriberState<T>,
     observed_version: u64,
+    /// The waker of the task waiting on this subscriber, dropped with it.
+    waker: Arc<WakerSlot>,
 }
 
 impl<T> Subscriber<T> {
     pub(crate) fn new(state: readlock::SharedReadLock<ObservableState<T>>, version: u64) -> Self {
-        Self { state, observed_version: version }
+        Self { state, observed_version: version, waker: Default::default() }
     }
 
     /// Wait for an update and get a clone of the updated value.
@@ -129,7 +136,7 @@ impl<T> Subscriber<T> {
             self.observed_version = version;
             Poll::Ready(Some(ObservableReadGuard::new(state)))
         } else {
-            state.add_waker(cx.waker().clone());
+            state.add_waker(&self.waker, cx.waker().clone());
             Poll::Pending
         }
     }
@@ -160,7 +167,7 @@ impl<T, L: Lock> Subscriber<T, L> {
     where
         L::SubscriberState<T>: Clone,
     {
-        Self { state: self.state.clone(), observed_version: 0 }
+        Self { state: self.state.clone(), observed_version: 0, waker: Default::default() }
     }
 }
 
@@ -178,7 +185,11 @@ where
     L::SubscriberState<T>: Clone,
 {
     fn clone(&self) -> Self {
-        Self { state: self.state.clone(), observed_version: self.observed_version }
+        Self {
+            state: self.state.clone(),
+            observed_version: self.observed_version,
+            waker: Default::default(),
+        }
     }
 }
 
